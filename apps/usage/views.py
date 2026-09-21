@@ -1,4 +1,5 @@
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -172,3 +173,115 @@ class ActivityView(APIView):
             'date': query_date.isoformat(),
             'sessions': session_list,
         })
+
+
+class ReportView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        report_type = request.query_params.get('type')
+        date_param = request.query_params.get('date')
+        fmt = request.query_params.get('format', 'csv')
+
+        if report_type not in ('daily', 'monthly'):
+            return Response(
+                {'error': 'type parameter is required (daily or monthly)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not date_param:
+            return Response(
+                {'error': 'date parameter is required (YYYY-MM-DD for daily, YYYY-MM for monthly)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_devices = Device.objects.filter(user=request.user)
+
+        try:
+            if report_type == 'daily':
+                from datetime import date as date_type
+                query_date = date_type.fromisoformat(date_param)
+                sessions = UsageSession.objects.filter(
+                    device__in=user_devices,
+                    start_time__date=query_date,
+                ).select_related('installed_app').order_by('-start_time')
+            else:
+                parts = date_param.split('-')
+                year = int(parts[0])
+                month = int(parts[1])
+                sessions = UsageSession.objects.filter(
+                    device__in=user_devices,
+                    start_time__year=year,
+                    start_time__month=month,
+                ).select_related('installed_app').order_by('-start_time')
+        except (ValueError, IndexError):
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD for daily or YYYY-MM for monthly.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if fmt == 'json':
+            session_list = []
+            total_seconds = 0
+            unique_packages = set()
+            for s in sessions:
+                duration_min = round(s.duration_seconds / 60, 1)
+                total_seconds += s.duration_seconds
+                pkg = s.package_name
+                unique_packages.add(pkg)
+                session_list.append({
+                    'app_name': s.installed_app.app_name if s.installed_app else pkg,
+                    'package_name': pkg,
+                    'start_time': s.start_time.isoformat(),
+                    'end_time': s.end_time.isoformat(),
+                    'duration_seconds': s.duration_seconds,
+                    'duration_minutes': duration_min,
+                    'source': s.source,
+                })
+
+            return Response({
+                'report_type': report_type,
+                'date': date_param,
+                'total_sessions': len(session_list),
+                'total_duration_seconds': total_seconds,
+                'total_duration_minutes': round(total_seconds / 60, 1),
+                'unique_apps': len(unique_packages),
+                'sessions': session_list,
+            })
+
+        import csv
+        import io
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            'App Name', 'Package Name', 'Start Time', 'End Time',
+            'Duration (seconds)', 'Duration (minutes)', 'Source',
+        ])
+
+        total_seconds = 0
+        for s in sessions:
+            duration_min = round(s.duration_seconds / 60, 1)
+            total_seconds += s.duration_seconds
+            writer.writerow([
+                s.installed_app.app_name if s.installed_app else s.package_name,
+                s.package_name,
+                s.start_time.isoformat(),
+                s.end_time.isoformat(),
+                s.duration_seconds,
+                duration_min,
+                s.source,
+            ])
+
+        writer.writerow([])
+        writer.writerow(['Total Sessions', sessions.count()])
+        writer.writerow(['Total Duration (seconds)', total_seconds])
+        writer.writerow(['Total Duration (minutes)', round(total_seconds / 60, 1)])
+
+        csv_content = output.getvalue()
+        output.close()
+
+        filename = f"orbit-report-{date_param}.csv"
+        response = HttpResponse(csv_content, content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
