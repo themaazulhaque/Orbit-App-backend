@@ -61,23 +61,19 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-_db_sslhost = os.getenv('POSTGRES_SSLHOST', '')
-_db_hostaddr = os.getenv('POSTGRES_HOSTADDR', '')
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('POSTGRES_DB', 'chronicle'),
         'USER': os.getenv('POSTGRES_USER', 'chronicle_user'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD', ''),
-        'HOST': _db_sslhost or os.getenv('POSTGRES_HOST', 'localhost'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
         'OPTIONS': {
             'sslmode': os.getenv('DB_SSLMODE', 'require'),
         },
     }
 }
-if _db_hostaddr:
-    DATABASES['default']['OPTIONS']['hostaddr'] = _db_hostaddr
 
 AUTH_USER_MODEL = 'users.User'
 
