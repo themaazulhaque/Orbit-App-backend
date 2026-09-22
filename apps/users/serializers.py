@@ -20,3 +20,12 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ('id', 'email', 'username', 'created_at')
         read_only_fields = ('id', 'created_at')
+
+
+class BootstrapSerializer(serializers.Serializer):
+    installation_id = serializers.CharField(min_length=16, max_length=128, trim_whitespace=False)
+
+    def validate_installation_id(self, value):
+        if any('\x00' <= ch <= '\x1f' for ch in value):
+            raise serializers.ValidationError('installation_id must not contain control characters.')
+        return value

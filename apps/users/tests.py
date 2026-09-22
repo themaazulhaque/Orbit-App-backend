@@ -67,3 +67,60 @@ class LoginTests(TestCase):
         data = {'email': 'nobody@example.com', 'password': 'pass12345'}
         response = self.client.post(self.login_url, data)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class BootstrapTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.bootstrap_url = '/api/v1/auth/bootstrap/'
+
+    def test_bootstrap_creates_install_identity(self):
+        response = self.client.post(self.bootstrap_url, {
+            'installation_id': 'b' * 36,
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+        self.assertTrue(response.data['user']['email'].endswith('@orbit.local'))
+        self.assertFalse(response.data['user']['email'].startswith('b' * 36))
+
+    def test_bootstrap_is_idempotent_for_same_install_id(self):
+        first = self.client.post(self.bootstrap_url, {
+            'installation_id': 'c' * 36,
+        })
+        second = self.client.post(self.bootstrap_url, {
+            'installation_id': 'c' * 36,
+        })
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(first.data['user']['id'], second.data['user']['id'])
+        self.assertNotEqual(first.data['access'], second.data['access'])
+
+    def test_bootstrap_different_install_ids_get_different_users(self):
+        first = self.client.post(self.bootstrap_url, {
+            'installation_id': 'd' * 36,
+        })
+        second = self.client.post(self.bootstrap_url, {
+            'installation_id': 'e' * 36,
+        })
+        self.assertNotEqual(first.data['user']['id'], second.data['user']['id'])
+
+    def test_bootstrap_rejects_short_install_id(self):
+        response = self.client.post(self.bootstrap_url, {
+            'installation_id': 'short',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bootstrap_rejects_missing_install_id(self):
+        response = self.client.post(self.bootstrap_url, {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bootstrap_tokens_work_for_authenticated_endpoints(self):
+        response = self.client.post(self.bootstrap_url, {
+            'installation_id': 'f' * 36,
+        })
+        access = response.data['access']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+        me = self.client.get('/api/v1/auth/me/')
+        self.assertEqual(me.status_code, status.HTTP_200_OK)
+        self.assertEqual(me.data['id'], response.data['user']['id'])
